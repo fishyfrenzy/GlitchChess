@@ -391,12 +391,20 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
         <div className="flex flex-col items-center select-none font-mono">
             <div className="bg-black p-4 border-2 border-green-500 shadow-[0_0_20px_rgba(74,222,128,0.2)]">
                 <div className="grid grid-cols-8 grid-rows-8 gap-0 border border-green-900 bg-black w-[600px] h-[600px]">
-                    {board.map((row, i) =>
-                        row.map((piece, j) => {
+                    {Array.from({ length: 8 }).map((_, displayRow) =>
+                        Array.from({ length: 8 }).map((_, displayCol) => {
                             // Standard chess logic, top-left is a8. i=0, j=0 is a8
+                            // If player is white, we iterate i from 0..7 and j from 0..7
+                            // If player is black, we iterate i from 7..0 and j from 7..0 to flip the board
+                            const i = playerColor === 'w' ? displayRow : 7 - displayRow;
+                            const j = playerColor === 'w' ? displayCol : 7 - displayCol;
+
+                            const piece = board[i][j];
                             const rank = 8 - i;
                             const file = String.fromCharCode('a'.charCodeAt(0) + j);
                             const squareName = `${file}${rank}`;
+                            // The actual dark square coloring is based on chess coordinates: 
+                            // e.g., a8 (i=0, j=0) is light (0+0=0: even).
                             const isDark = (i + j) % 2 === 1;
                             const sqMod = modifiers[squareName];
 
