@@ -1,13 +1,18 @@
 'use client';
 
-import { useParams } from 'next/navigation';
+import { useParams, useSearchParams } from 'next/navigation';
 import { useState, useEffect, useRef } from 'react';
 import ChessGame from '@/components/ChessGame';
 import { supabase } from '@/lib/supabase';
 
 export default function RoomPage() {
     const params = useParams();
+    const searchParams = useSearchParams();
     const roomCode = params.code as string;
+
+    const initialTime = parseInt(searchParams.get('t') || '5') * 60;
+    const increment = parseInt(searchParams.get('i') || '3');
+
     const [playerColor, setPlayerColor] = useState<'w' | 'b' | null>(null);
     const [availableColors, setAvailableColors] = useState({ w: true, b: true });
 
@@ -72,7 +77,17 @@ export default function RoomPage() {
                 });
             }
         } else {
-            const initialState = { fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1', turn: 'w', upgrades: [], modifiers: {}, walls: {}, players: { w: color === 'w', b: color === 'b' } };
+            const initialState = {
+                fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
+                turn: 'w',
+                upgrades: [],
+                modifiers: {},
+                walls: {},
+                players: { w: color === 'w', b: color === 'b' },
+                timeConfig: { base: initialTime, increment: increment },
+                timeLeft: { w: initialTime, b: initialTime },
+                lastMoveTime: null
+            };
             await supabase.from('games').insert([{ room_code: roomCode, state: initialState }]);
             if (channelRef.current) {
                 channelRef.current.send({

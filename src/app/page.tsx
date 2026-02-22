@@ -6,11 +6,13 @@ import { useRouter } from 'next/navigation';
 export default function Home() {
   const router = useRouter();
   const [joinCode, setJoinCode] = useState('');
+  const [timeControl, setTimeControl] = useState('5'); // minutes
+  const [increment, setIncrement] = useState('3'); // seconds
 
   const handleCreateRoom = () => {
     // Generate a 5-letter room code
     const code = Math.random().toString(36).substring(2, 7).toUpperCase();
-    router.push(`/room/${code}`);
+    router.push(`/room/${code}?t=${timeControl}&i=${increment}`);
   };
 
   const handleJoinRoom = (e: React.FormEvent) => {
@@ -36,6 +38,26 @@ export default function Home() {
           <div className="flex-1 flex flex-col space-y-4 justify-center">
             <h2 className="text-2xl font-bold text-green-400">&gt; INIT_ROOM</h2>
             <p className="text-sm text-green-700">Start a new room and invite a local socket.</p>
+            <div className="flex gap-4 mt-2">
+              <select
+                value={timeControl}
+                onChange={e => setTimeControl(e.target.value)}
+                className="bg-black border border-green-500 text-green-400 py-2 px-3 font-mono focus:outline-none focus:ring-1 focus:ring-green-400 w-1/2"
+              >
+                <option value="1">1 MINUTE</option>
+                <option value="5">5 MINUTES</option>
+                <option value="10">10 MINUTES</option>
+              </select>
+              <select
+                value={increment}
+                onChange={e => setIncrement(e.target.value)}
+                className="bg-black border border-green-500 text-green-400 py-2 px-3 font-mono focus:outline-none focus:ring-1 focus:ring-green-400 w-1/2"
+              >
+                <option value="0">+0 SEC</option>
+                <option value="1">+1 SEC</option>
+                <option value="3">+3 SEC</option>
+              </select>
+            </div>
             <button
               onClick={handleCreateRoom}
               className="mt-4 bg-transparent border border-green-500 hover:bg-green-900/30 text-green-400 font-bold py-3 px-6 transition-colors"

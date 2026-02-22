@@ -25,6 +25,9 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
     const [awaitingSwapSource, setAwaitingSwapSource] = useState<string | null>(null);
     const [sniperAttacker, setSniperAttacker] = useState<string | null>(null);
     const [walls, setWalls] = useState<Record<string, number>>({}); // square -> turns_left
+    const [timeConfig, setTimeConfig] = useState({ base: 300, increment: 3 });
+    const [timeLeft, setTimeLeft] = useState({ w: 300, b: 300 });
+    const [lastMoveTime, setLastMoveTime] = useState<number | null>(null);
 
     // Channel ref for broadcasting
     const channelRef = useRef<any>(null);
@@ -47,8 +50,11 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
                 setUpgrades(data.state.upgrades || []);
                 setModifiers(data.state.modifiers || {});
                 setWalls(data.state.walls || {});
+                if (data.state.timeConfig) setTimeConfig(data.state.timeConfig);
+                if (data.state.timeLeft) setTimeLeft(data.state.timeLeft);
+                if (data.state.lastMoveTime) setLastMoveTime(data.state.lastMoveTime);
             } else if (error && error.code === 'PGRST116') {
-                // Room doesn't exist in DB, create it with new state
+                // Should not happen now since RoomPage initializes, but fallback
                 const initialState = { fen: chess.fen(), turn: 'w', upgrades: [], modifiers: {}, walls: {} };
                 await supabase.from('games').insert([{ room_code: roomCode, state: initialState }]);
             }
@@ -70,6 +76,8 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
                 setUpgrades(state.upgrades || []);
                 setModifiers(state.modifiers || {});
                 setWalls(state.walls || {});
+                if (state.timeLeft) setTimeLeft(state.timeLeft);
+                if (state.lastMoveTime) setLastMoveTime(state.lastMoveTime);
             })
             .on('postgres_changes', {
                 event: 'UPDATE',
@@ -86,6 +94,8 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
                 setUpgrades(state.upgrades || []);
                 setModifiers(state.modifiers || {});
                 setWalls(state.walls || {});
+                if (state.timeLeft) setTimeLeft(state.timeLeft);
+                if (state.lastMoveTime) setLastMoveTime(state.lastMoveTime);
             })
             .subscribe();
 
@@ -97,9 +107,53 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
         };
     }, [roomCode, chess]);
 
+    useEffect(() => {
+        // Visual ticks
+        const interval = setInterval(() => {
+            if (lastMoveTime) {
+                // We tick locally, but we don't sync this DB directly.
+                // Re-calculate based on Date.now() - lastMoveTime
+                const elapsedSeconds = Math.floor((Date.now() - lastMoveTime) / 1000);
+                setTimeLeft(prev => ({
+                    ...prev,
+                    [turn]: Math.max(0, prev[turn] - 1)
+                }));
+            }
+        }, 1000);
+
+        return () => clearInterval(interval);
+    }, [lastMoveTime, turn]);
+
+    const formatTime = (seconds: number) => {
+        const m = Math.floor(seconds / 60);
+        const s = seconds % 60;
+        return `${m}:${s < 10 ? '0' : ''}${s}`;
+    };
+
+    const MODIFIER_DESCRIPTIONS: Record<string, string> = {
+        'double_move': 'x2 MOVE: Move twice in one turn!',
+        'martyrdom': 'MARTYR: Explodes on capture killing attacker',
+        'hidden_move': 'STEALTH: Next move is invisible to enemy',
+        'swap': 'SWAP: Swap places with any friendly piece',
+        'ghost': 'GHOST: Pass through walls and pieces (1 turn)',
+        'necromancer': 'NECRO: Spawns friendly pawn on capture',
+        'sniper': 'SNIPER: Ranged kill without moving',
+        'builder': 'BUILDER: Drops a 2-turn impenetrable wall',
+        'time_add': '+1 MINUTE: Adds 60 seconds to your clock',
+        'time_sub': '-1 MINUTE: Removes 60 seconds from opponent'
+    };
+
     const handleSquareClick = async (square: string) => {
         // Basic turn enforcement
         if (turn !== playerColor) return;
+        if (timeLeft[playerColor] <= 0) return; // Out of time!
+
+        // Compute elapsed time logic before doing anything
+        const now = Date.now();
+        let currentElapsedSeconds = 0;
+        if (lastMoveTime) {
+            currentElapsedSeconds = Math.floor((now - lastMoveTime) / 1000);
+        }
 
         if (selectedSquare) {
             if (selectedSquare === square) {
@@ -321,6 +375,12 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
                     }
                 }
 
+                let nextTimeLeft = { ...timeLeft };
+                // Calculate actual consumed time
+                if (lastMoveTime) {
+                    nextTimeLeft[playerColor] = Math.max(0, nextTimeLeft[playerColor] - currentElapsedSeconds);
+                }
+
                 // Did we land on an upgrade?
                 let nextUpgrades = [...upgrades];
                 const consumedIndex = nextUpgrades.findIndex(u => u.x === fileIndex && u.y === 7 - rankIndex);
@@ -350,6 +410,21 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
                     }
                 }
 
+                // Process time upgrades
+                if (nextModifiers[square] && nextModifiers[square].type === 'time_add') {
+                    nextTimeLeft[playerColor] += 60;
+                    delete nextModifiers[square]; // consume instantly
+                } else if (nextModifiers[square] && nextModifiers[square].type === 'time_sub') {
+                    const opponent = playerColor === 'w' ? 'b' : 'w';
+                    nextTimeLeft[opponent] = Math.max(0, nextTimeLeft[opponent] - 60);
+                    delete nextModifiers[square]; // consume instantly
+                }
+
+                if (currentTurn !== turn) {
+                    // Turn advanced! Add increment
+                    nextTimeLeft[playerColor] += timeConfig.increment;
+                }
+
                 // Process End-of-Turn spawns and movements for existing upgrades
                 nextUpgrades = processEndTurnSpawnsAndMoves(chess, nextUpgrades);
 
@@ -359,6 +434,8 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
                 setSelectedSquare(null);
                 setUpgrades(nextUpgrades);
                 setModifiers(nextModifiers);
+                setTimeLeft(nextTimeLeft);
+                setLastMoveTime(Date.now());
 
                 // Sync with db
                 const newState = {
@@ -366,7 +443,10 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
                     turn: currentTurn,
                     upgrades: nextUpgrades,
                     modifiers: nextModifiers,
-                    walls
+                    walls,
+                    timeConfig,
+                    timeLeft: nextTimeLeft,
+                    lastMoveTime: Date.now()
                 };
 
                 await supabase
@@ -474,14 +554,20 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
                                     )}
                                     {/* Active Modifier Badge ON the piece */}
                                     {sqMod && (
-                                        <div className="absolute top-1 right-1 bg-green-500 text-[10px] text-black px-1.5 py-0.5 font-bold shadow-md uppercase z-20">
+                                        <div
+                                            title={MODIFIER_DESCRIPTIONS[sqMod.type] || sqMod.type}
+                                            className="absolute top-1 right-1 bg-green-500 text-[10px] text-black px-1.5 py-0.5 font-bold shadow-md uppercase z-20 hover:scale-125 transition-transform cursor-help"
+                                        >
                                             {sqMod.type.substring(0, 3)}
                                         </div>
                                     )}
                                     {/* Glitch Mystery Upgrade Entity Display */}
                                     {upgrades.find(u => u.x === j && u.y === i) && (
-                                        <div className="absolute inset-0 flex items-center justify-center z-0 pointer-events-none">
-                                            <div className="animate-pulse flex items-center justify-center text-2xl font-black text-green-400 drop-shadow-[0_0_10px_rgba(74,222,128,0.8)] opacity-70">
+                                        <div
+                                            title={MODIFIER_DESCRIPTIONS[upgrades.find(u => u.x === j && u.y === i)!.type] || 'Mystery Upgrade'}
+                                            className="absolute inset-0 flex items-center justify-center z-0 cursor-help"
+                                        >
+                                            <div className="animate-pulse flex items-center justify-center text-2xl font-black text-green-400 drop-shadow-[0_0_10px_rgba(74,222,128,0.8)] opacity-70 hover:scale-110 transition-transform">
                                                 [?]
                                             </div>
                                         </div>
@@ -492,7 +578,14 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
                     )}
                 </div>
             </div>
-            <div className="mt-6 flex justify-between w-full max-w-[600px] text-green-700 font-mono text-sm uppercase tracking-widest">
+            <div className="mt-4 flex justify-between w-full max-w-[600px] text-green-700 font-mono text-sm uppercase tracking-widest bg-green-950/20 p-2 border border-green-900/50">
+                <div className="flex gap-4">
+                    <span className={turn === 'w' ? 'text-green-400 font-bold' : ''}>W: {formatTime(timeLeft.w)}</span>
+                    <span className={turn === 'b' ? 'text-green-400 font-bold' : ''}>B: {formatTime(timeLeft.b)}</span>
+                </div>
+                <div>+ {timeConfig.increment}s</div>
+            </div>
+            <div className="mt-2 flex justify-between w-full max-w-[600px] text-green-700 font-mono text-sm uppercase tracking-widest">
                 <div>&gt; PLAYER: {playerColor === 'w' ? 'WHITE_SYS' : 'BLACK_SYS'}</div>
                 <div>&gt; STAT: {turn === playerColor ? <span className="text-green-400 animate-pulse">AWAITING_INPUT</span> : <span className="text-green-900">PROCESSING_OPPONENT...</span>}</div>
             </div>
