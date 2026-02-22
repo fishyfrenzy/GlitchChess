@@ -508,7 +508,44 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
                 if (walls[square]) throw new Error("Blocked by Builder Wall");
 
                 const pieceAtSource = chess.get(selectedSquare as any);
-                const sourceMod = modifiers[selectedSquare];
+                let sourceMod = modifiers[selectedSquare];
+
+                // Helper to check for sliding pieces passing through walls
+                const checkWallCollision = (fromSq: string, toSq: string, w: Record<string, number>) => {
+                    if (!pieceAtSource) return false;
+                    const type = pieceAtSource.type;
+                    if (!['r', 'b', 'q', 'p'].includes(type)) return false;
+
+                    const fromFile = fromSq.charCodeAt(0);
+                    const fromRank = parseInt(fromSq[1]);
+                    const toFile = toSq.charCodeAt(0);
+                    const toRank = parseInt(toSq[1]);
+
+                    const dx = toFile - fromFile;
+                    const dy = toRank - fromRank;
+
+                    // Only check straight/diagonal lines (where one is 0 or |dx| == |dy|)
+                    if (dx === 0 || dy === 0 || Math.abs(dx) === Math.abs(dy)) {
+                        const stepX = dx === 0 ? 0 : Math.sign(dx);
+                        const stepY = dy === 0 ? 0 : Math.sign(dy);
+
+                        let curX = fromFile + stepX;
+                        let curY = fromRank + stepY;
+
+                        while (curX !== toFile || curY !== toRank) {
+                            const sq = String.fromCharCode(curX) + curY;
+                            if (w[sq]) return true;
+                            curX += stepX;
+                            curY += stepY;
+                        }
+                    }
+                    return false;
+                };
+
+                // Normal pieces cannot move through walls (Ghost bypasses this)
+                if (sourceMod?.type !== 'ghost' && checkWallCollision(selectedSquare, square, walls)) {
+                    throw new Error("Path blocked by Builder Wall");
+                }
 
                 let algMove = '';
                 let isCapture = false;
@@ -583,6 +620,26 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
 
                 if (chess.isCheckmate()) {
                     nextWinner = playerColor as 'w' | 'b';
+                }
+
+                const targetMod = modifiers[square];
+
+                // Martyrdom explosion check
+                if (isCapture && targetMod?.type === 'martyrdom') {
+                    // Explode! The capturing piece dies.
+                    chess.remove(square as any); // destroy the capturing piece that just landed here
+                    playSound('error');
+
+                    // Clear both modifiers
+                    delete nextModifiers[selectedSquare];
+                    delete nextModifiers[square];
+
+                    // Bypass the sourceMod transfer entirely since the piece is dead
+                    sourceMod = undefined as any;
+                    algMove += ' 💥 (MARTYRED)';
+                } else if (isCapture) {
+                    // Normal capture: clear whatever modifier was on the target
+                    delete nextModifiers[square];
                 }
 
                 // Ghost king capture check (if handled above, nextWinner is already set)
