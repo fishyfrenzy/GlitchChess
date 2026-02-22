@@ -1,65 +1,75 @@
-import Image from "next/image";
+'use client';
+
+import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 
 export default function Home() {
+  const router = useRouter();
+  const [joinCode, setJoinCode] = useState('');
+
+  const handleCreateRoom = () => {
+    // Generate a 5-letter room code
+    const code = Math.random().toString(36).substring(2, 7).toUpperCase();
+    router.push(`/room/${code}`);
+  };
+
+  const handleJoinRoom = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (joinCode.length === 5) {
+      router.push(`/room/${joinCode.toUpperCase()}`);
+    }
+  };
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
+    <main className="flex min-h-screen flex-col items-center justify-center p-24 bg-black text-green-500 font-mono">
+      <div className="z-10 max-w-5xl w-full items-center justify-between font-mono text-sm flex flex-col gap-8">
+        <div className="text-center space-y-4">
+          <h1 className="text-5xl font-extrabold tracking-tight lg:text-7xl text-green-400 drop-shadow-[0_0_10px_rgba(74,222,128,0.5)]">
+            &gt; ROGUELIKE_CHESS.exe
           </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+          <p className="text-green-600 text-lg max-w-lg mx-auto">
+            [SYS_MSG]: PvP realtime chess with chaotic powerups, upgrades, and a tug-of-war spawner.
           </p>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+
+        <div className="flex flex-col md:flex-row gap-12 mt-12 w-full max-w-2xl bg-black p-8 rounded-none border-2 border-green-500 shadow-[0_0_15px_rgba(74,222,128,0.2)]">
+          <div className="flex-1 flex flex-col space-y-4 justify-center">
+            <h2 className="text-2xl font-bold text-green-400">&gt; INIT_ROOM</h2>
+            <p className="text-sm text-green-700">Start a new room and invite a local socket.</p>
+            <button
+              onClick={handleCreateRoom}
+              className="mt-4 bg-transparent border border-green-500 hover:bg-green-900/30 text-green-400 font-bold py-3 px-6 transition-colors"
+            >
+              [ CREATE ]
+            </button>
+          </div>
+
+          <div className="w-px bg-green-900 hidden md:block"></div>
+          <div className="h-px bg-green-900 md:hidden w-full"></div>
+
+          <div className="flex-1 flex flex-col space-y-4 justify-center">
+            <h2 className="text-2xl font-bold text-green-400">&gt; JOIN_ROOM</h2>
+            <p className="text-sm text-green-700">Enter a 5-letter hash to connect.</p>
+            <form onSubmit={handleJoinRoom} className="flex flex-col gap-3 mt-4">
+              <input
+                type="text"
+                placeholder="HASH"
+                maxLength={5}
+                value={joinCode}
+                onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
+                className="bg-black border border-green-500 text-center font-mono text-lg py-3 px-4 focus:outline-none focus:ring-1 focus:ring-green-400 text-green-400 uppercase transition-all placeholder:text-green-900"
+              />
+              <button
+                type="submit"
+                disabled={joinCode.length !== 5}
+                className="bg-green-500 hover:bg-green-400 text-black disabled:opacity-30 disabled:cursor-not-allowed font-bold py-3 px-6 transition-colors"
+              >
+                [ CONNECT ]
+              </button>
+            </form>
+          </div>
         </div>
-      </main>
-    </div>
+      </div>
+    </main>
   );
 }
