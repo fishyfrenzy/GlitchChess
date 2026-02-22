@@ -34,6 +34,8 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
     const [history, setHistory] = useState<any[]>([]);
     const [viewingHistoryIndex, setViewingHistoryIndex] = useState<number | null>(null);
 
+    const [armedDoubleMove, setArmedDoubleMove] = useState<string | null>(null);
+
     // Channel ref for broadcasting
     const channelRef = useRef<any>(null);
 
@@ -320,11 +322,12 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
 
                     setBoard(chess.board());
                     setTurn(currentTurn as 'w' | 'b');
-                    setSelectedSquare(null);
-                    setBuilderActive(null);
                     setUpgrades(nextUpgrades);
                     setModifiers(nextModifiers);
                     setWalls(nextWalls);
+                    setBuilderActive(null);
+                    setSelectedSquare(null);
+                    setArmedDoubleMove(null);
 
                     await supabase
                         .from('games')
@@ -590,17 +593,22 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
                     delete nextModifiers[selectedSquare];
                     let keepModifier = true;
                     if (sourceMod.type === 'double_move') {
-                        // Revert turn in FEN
-                        fen = fen.replace(` ${currentTurn} `, ` ${currentTurn === 'w' ? 'b' : 'w'} `);
-                        currentTurn = currentTurn === 'w' ? 'b' : 'w';
-                        chess.load(fen);
-                        keepModifier = false; // consume
+                        if (armedDoubleMove === selectedSquare) {
+                            // Revert turn in FEN
+                            fen = fen.replace(` ${currentTurn} `, ` ${currentTurn === 'w' ? 'b' : 'w'} `);
+                            currentTurn = currentTurn === 'w' ? 'b' : 'w';
+                            chess.load(fen);
+                            keepModifier = false; // consume
+                            setArmedDoubleMove(null);
+                        }
                     } else if (sourceMod.type === 'ghost') {
                         keepModifier = false; // consume after 1 turn
-                    } else if (sourceMod.type === 'necromancer' && !chess.get(square as any)) { // hacky capture check since move var is scoped out
-                        // If it was a capture, the target square had an enemy before we manually or naturally moved.
-                        // Actually a proper check: we compare fen pieces. But for now...
-                        // chess.put({ type: 'p', color: playerColor }, selectedSquare as any); // Spawn pawn
+                    } else if (sourceMod.type === 'necromancer' && isCapture) {
+                        try {
+                            chess.put({ type: 'p', color: playerColor }, selectedSquare as any); // Spawn pawn
+                        } catch (e) {
+                            console.error("Necromancer failed", e);
+                        }
                     }
                     if (keepModifier) {
                         nextModifiers[square] = sourceMod;
@@ -712,11 +720,13 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
                     setSniperAttacker(null);
                     setBuilderActive(null);
                     setAwaitingSwapSource(null);
+                    setArmedDoubleMove(null);
                 } else {
                     setSelectedSquare(null);
                     setSniperAttacker(null);
                     setBuilderActive(null);
                     setAwaitingSwapSource(null);
+                    setArmedDoubleMove(null);
                 }
             }
         } else {
@@ -728,6 +738,7 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
                 setSniperAttacker(null);
                 setBuilderActive(null);
                 setAwaitingSwapSource(null);
+                setArmedDoubleMove(null);
             }
         }
     };
@@ -882,7 +893,7 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
                 </div>
 
                 {/* MANUAL ABILITY ACTIVATION BUTTON */}
-                {selectedSquare && modifiers[selectedSquare] && ['sniper', 'builder', 'swap'].includes(modifiers[selectedSquare].type) && !sniperAttacker && !builderActive && !awaitingSwapSource && !isGameOver && (
+                {selectedSquare && modifiers[selectedSquare] && ['sniper', 'builder', 'swap', 'double_move'].includes(modifiers[selectedSquare].type) && !sniperAttacker && !builderActive && !awaitingSwapSource && !isGameOver && (
                     <div className="mt-2 w-full max-w-[600px] flex justify-center">
                         <button
                             onClick={(e) => {
@@ -891,10 +902,14 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
                                 if (type === 'sniper') setSniperAttacker(selectedSquare);
                                 if (type === 'builder') setBuilderActive({ source: selectedSquare, placed: [] });
                                 if (type === 'swap') setAwaitingSwapSource(selectedSquare);
+                                if (type === 'double_move') {
+                                    if (armedDoubleMove === selectedSquare) setArmedDoubleMove(null);
+                                    else setArmedDoubleMove(selectedSquare);
+                                }
                             }}
-                            className="bg-green-500 hover:bg-green-400 text-black font-bold py-2 px-6 w-full animate-bounce shadow-[0_0_10px_rgba(74,222,128,0.6)]"
+                            className={`font-bold py-2 px-6 w-full shadow-[0_0_10px_rgba(74,222,128,0.6)] ${armedDoubleMove === selectedSquare ? 'bg-green-300 text-black animate-pulse' : 'bg-green-500 hover:bg-green-400 text-black animate-bounce'}`}
                         >
-                            [ FIRE ABILITY: {modifiers[selectedSquare].type.toUpperCase()} ]
+                            {armedDoubleMove === selectedSquare ? '[ DOUBLE MOVE ARMED - CLICK DESTINATION ]' : `[ FIRE ABILITY: ${modifiers[selectedSquare].type.toUpperCase()} ]`}
                         </button>
                     </div>
                 )}
