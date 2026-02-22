@@ -35,6 +35,7 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
     const [viewingHistoryIndex, setViewingHistoryIndex] = useState<number | null>(null);
 
     const [armedDoubleMove, setArmedDoubleMove] = useState<string | null>(null);
+    const [stealthEntities, setStealthEntities] = useState<any[]>([]);
 
     // Channel ref for broadcasting
     const channelRef = useRef<any>(null);
@@ -59,6 +60,7 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
                 setWalls(data.state.walls || {});
                 setHistory(data.state.history || []);
                 setWinner(data.state.winner || null);
+                setStealthEntities(data.state.stealthEntities || []);
                 if (data.state.timeConfig) setTimeConfig(data.state.timeConfig);
                 if (data.state.timeLeft) {
                     setTimeLeft(data.state.timeLeft);
@@ -67,7 +69,7 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
                 if (data.state.lastMoveTime) setLastMoveTime(data.state.lastMoveTime);
             } else if (error && error.code === 'PGRST116') {
                 // Should not happen now since RoomPage initializes, but fallback
-                const initialState = { fen: chess.fen(), turn: 'w', upgrades: [], modifiers: {}, walls: {}, history: [], winner: null };
+                const initialState = { fen: chess.fen(), turn: 'w', upgrades: [], modifiers: {}, walls: {}, history: [], winner: null, stealthEntities: [] };
                 await supabase.from('games').insert([{ room_code: roomCode, state: initialState }]);
             }
         };
@@ -90,6 +92,7 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
                 setWalls(state.walls || {});
                 setHistory(state.history || []);
                 setWinner(state.winner || null);
+                setStealthEntities(state.stealthEntities || []);
                 if (state.timeLeft) setTimeLeft(state.timeLeft);
                 if (state.lastMoveTime) setLastMoveTime(state.lastMoveTime);
             })
@@ -110,6 +113,7 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
                 setWalls(state.walls || {});
                 setHistory(state.history || []);
                 setWinner(state.winner || null);
+                setStealthEntities(state.stealthEntities || []);
                 if (state.timeLeft) setTimeLeft(state.timeLeft);
                 if (state.lastMoveTime) setLastMoveTime(state.lastMoveTime);
             })
@@ -510,6 +514,11 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
                 const pieceAtSource = chess.get(selectedSquare as any);
                 let sourceMod = modifiers[selectedSquare];
 
+                let stealthOptions: string[] = [];
+                if (sourceMod?.type === 'hidden_move') {
+                    stealthOptions = chess.moves({ square: selectedSquare as any, verbose: true }).map(m => m.to);
+                }
+
                 // Helper to check for sliding pieces passing through walls
                 const checkWallCollision = (fromSq: string, toSq: string, w: Record<string, number>) => {
                     if (!pieceAtSource) return false;
@@ -617,6 +626,16 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
                 let currentTurn = chess.turn();
                 let nextModifiers = { ...modifiers };
                 let nextWalls = decayWalls(walls);
+                let nextStealthEntities = [...stealthEntities];
+
+                if (sourceMod?.type === 'hidden_move') {
+                    nextStealthEntities.push({
+                        realSquare: square,
+                        options: stealthOptions,
+                        player: playerColor,
+                        pieceData: chess.get(square as any)
+                    });
+                }
 
                 if (chess.isCheckmate()) {
                     nextWinner = playerColor as 'w' | 'b';
@@ -725,8 +744,16 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
                 // Process End-of-Turn spawns and movements for existing upgrades
                 nextUpgrades = processEndTurnSpawnsAndMoves(chess, nextUpgrades);
 
+                // Filter stealth entities (clear our own since turn ended, keep opponent's if still valid)
+                nextStealthEntities = nextStealthEntities.filter(e => {
+                    if (e.player === playerColor) return false;
+                    const p = chess.get(e.realSquare as any);
+                    if (!p || p.color !== e.player || p.type !== e.pieceData.type) return false;
+                    return true;
+                });
+
                 const moveText = `${playerColor === 'w' ? 'W' : 'B'}: ${algMove}`;
-                const nextHistory = [...history, { fen: chess.fen(), upgrades: nextUpgrades, modifiers: nextModifiers, walls, text: moveText }];
+                const nextHistory = [...history, { fen: chess.fen(), upgrades: nextUpgrades, modifiers: nextModifiers, walls, stealthEntities: nextStealthEntities, text: moveText }];
                 setHistory(nextHistory);
 
                 // Optimistic update
@@ -736,6 +763,7 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
                 setUpgrades(nextUpgrades);
                 setModifiers(nextModifiers);
                 setWalls(nextWalls);
+                setStealthEntities(nextStealthEntities);
                 setTimeLeft(nextTimeLeft);
                 setDisplayTimeLeft(nextTimeLeft);
                 setLastMoveTime(Date.now());
@@ -749,6 +777,7 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
                     modifiers: nextModifiers,
                     walls: nextWalls,
                     history: nextHistory,
+                    stealthEntities: nextStealthEntities,
                     winner: nextWinner || winner,
                     timeConfig,
                     timeLeft: nextTimeLeft,
@@ -852,6 +881,14 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
     let displayUpgrades = upgrades;
     let displayModifiers = modifiers;
     let displayWalls = walls;
+    let displayStealthEntities = stealthEntities;
+
+    let validDestinations: string[] = [];
+    if (selectedSquare && !sniperAttacker && !builderActive && !awaitingSwapSource && turn === playerColor && winner === null) {
+        try {
+            validDestinations = chess.moves({ square: selectedSquare as any, verbose: true }).map(m => m.to);
+        } catch (e) { }
+    }
 
     if (viewingHistoryIndex !== null && history[viewingHistoryIndex]) {
         try {
@@ -860,6 +897,8 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
             displayUpgrades = history[viewingHistoryIndex].upgrades || [];
             displayModifiers = history[viewingHistoryIndex].modifiers || {};
             displayWalls = history[viewingHistoryIndex].walls || {};
+            displayStealthEntities = history[viewingHistoryIndex].stealthEntities || [];
+            validDestinations = [];
         } catch (e) { }
     }
 
@@ -889,6 +928,23 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
                                 const isDark = (i + j) % 2 === 1;
                                 const sqMod = displayModifiers[squareName];
 
+                                let pieceToDisplay = piece;
+                                let isStealthTarget = false;
+                                let stealthPieceData = null;
+
+                                // Mask real position of opponent's stealth piece
+                                const stealthMask = displayStealthEntities.find(e => e.player !== playerColor && e.realSquare === squareName);
+                                if (stealthMask) pieceToDisplay = null;
+
+                                // Show ghost positions of opponent's stealth piece
+                                const stealthOption = displayStealthEntities.find(e => e.player !== playerColor && e.options.includes(squareName));
+                                if (stealthOption) {
+                                    isStealthTarget = true;
+                                    stealthPieceData = stealthOption.pieceData;
+                                }
+
+                                const isPreviewDestination = validDestinations.includes(squareName);
+
                                 return (
                                     <div
                                         key={squareName}
@@ -914,15 +970,28 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
                                                 </div>
                                             </div>
                                         )}
-                                        {piece && (
+                                        {pieceToDisplay && (
                                             <span
                                                 className={`
                                                     z-10 select-none drop-shadow-[0_0_5px_currentColor]
-                                                    ${piece.color === 'w' ? 'text-green-100' : 'text-green-600'}
+                                                    ${pieceToDisplay.color === 'w' ? 'text-green-100' : 'text-green-600'}
                                                 `}
                                             >
-                                                {PIECE_SYMBOLS[piece.color === 'w' ? piece.type.toUpperCase() : piece.type]}
+                                                {PIECE_SYMBOLS[pieceToDisplay.color === 'w' ? pieceToDisplay.type.toUpperCase() : pieceToDisplay.type]}
                                             </span>
+                                        )}
+                                        {isStealthTarget && stealthPieceData && !pieceToDisplay && (
+                                            <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none opacity-40 animate-pulse">
+                                                <span className={`text-[40px] drop-shadow-[0_0_10px_currentColor] ${stealthPieceData.color === 'w' ? 'text-green-100' : 'text-green-600'}`}>
+                                                    {PIECE_SYMBOLS[stealthPieceData.color === 'w' ? stealthPieceData.type.toUpperCase() : stealthPieceData.type]}
+                                                </span>
+                                                <span className="absolute text-[60px] text-green-400 font-black drop-shadow-[0_0_15px_rgba(74,222,128,1)] opacity-60">?</span>
+                                            </div>
+                                        )}
+                                        {isPreviewDestination && (
+                                            <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none">
+                                                <div className="w-4 h-4 rounded-full bg-green-400/60 shadow-[0_0_10px_rgba(74,222,128,0.8)] animate-pulse"></div>
+                                            </div>
                                         )}
                                         {sqMod && (
                                             <div
