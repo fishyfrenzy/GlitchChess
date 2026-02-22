@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Chess } from 'chess.js';
 import { supabase } from '@/lib/supabase';
 import { processEndTurnSpawnsAndMoves, UpgradeEntity } from '@/lib/gameLogic';
@@ -25,6 +25,9 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
     const [awaitingSwapSource, setAwaitingSwapSource] = useState<string | null>(null);
     const [sniperAttacker, setSniperAttacker] = useState<string | null>(null);
     const [walls, setWalls] = useState<Record<string, number>>({}); // square -> turns_left
+
+    // Channel ref for broadcasting
+    const channelRef = useRef<any>(null);
 
     useEffect(() => {
         // 1. Fetch initial state (this assumes the table exists and allows select)
@@ -53,8 +56,21 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
 
         fetchState();
 
-        // 2. Realtime sync subscription
-        const channel = supabase.channel(`room:${roomCode}`)
+        // 2. Realtime sync subscription (Broadcast + Postgres Fallback)
+        const channel = supabase.channel(`room:${roomCode}`, {
+            config: { broadcast: { self: false } }
+        })
+            .on('broadcast', { event: 'game_update' }, (payload) => {
+                const { state } = payload.payload;
+                if (state.fen) {
+                    try { chess.load(state.fen); } catch (e) { }
+                }
+                setBoard(chess.board());
+                setTurn(state.turn);
+                setUpgrades(state.upgrades || []);
+                setModifiers(state.modifiers || {});
+                setWalls(state.walls || {});
+            })
             .on('postgres_changes', {
                 event: 'UPDATE',
                 schema: 'public',
@@ -73,7 +89,12 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
             })
             .subscribe();
 
-        return () => { supabase.removeChannel(channel); };
+        channelRef.current = channel;
+
+        return () => {
+            supabase.removeChannel(channel);
+            channelRef.current = null;
+        };
     }, [roomCode, chess]);
 
     const handleSquareClick = async (square: string) => {
@@ -138,6 +159,14 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
                             .from('games')
                             .update({ state: newState })
                             .eq('room_code', roomCode);
+
+                        if (channelRef.current) {
+                            channelRef.current.send({
+                                type: 'broadcast',
+                                event: 'game_update',
+                                payload: { state: newState }
+                            });
+                        }
                         return;
                     } else {
                         throw new Error("Invalid swap target");
@@ -191,6 +220,14 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
                                 .from('games')
                                 .update({ state: newState })
                                 .eq('room_code', roomCode);
+
+                            if (channelRef.current) {
+                                channelRef.current.send({
+                                    type: 'broadcast',
+                                    event: 'game_update',
+                                    payload: { state: newState }
+                                });
+                            }
                             return;
                         } else {
                             throw new Error("Target out of range for Sniper");
@@ -336,6 +373,14 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
                     .from('games')
                     .update({ state: newState })
                     .eq('room_code', roomCode);
+
+                if (channelRef.current) {
+                    channelRef.current.send({
+                        type: 'broadcast',
+                        event: 'game_update',
+                        payload: { state: newState }
+                    });
+                }
 
             } catch (e) {
                 console.log("Invalid move to", square);

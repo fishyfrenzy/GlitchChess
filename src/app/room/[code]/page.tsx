@@ -1,7 +1,7 @@
 'use client';
 
 import { useParams } from 'next/navigation';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import ChessGame from '@/components/ChessGame';
 import { supabase } from '@/lib/supabase';
 
@@ -10,6 +10,9 @@ export default function RoomPage() {
     const roomCode = params.code as string;
     const [playerColor, setPlayerColor] = useState<'w' | 'b' | null>(null);
     const [availableColors, setAvailableColors] = useState({ w: true, b: true });
+
+    // Channel ref for broadcasting presence
+    const channelRef = useRef<any>(null);
 
     useEffect(() => {
         const fetchAvailability = async () => {
@@ -23,7 +26,18 @@ export default function RoomPage() {
         };
         fetchAvailability();
 
-        const channel = supabase.channel(`room_lobby:${roomCode}`)
+        const channel = supabase.channel(`room_lobby:${roomCode}`, {
+            config: { broadcast: { self: false } }
+        })
+            .on('broadcast', { event: 'presence_update' }, (payload) => {
+                const { players } = payload.payload;
+                if (players) {
+                    setAvailableColors({
+                        w: !players.w,
+                        b: !players.b,
+                    });
+                }
+            })
             .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'games', filter: `room_code=eq.${roomCode}` }, (payload) => {
                 if (payload.new.state?.players) {
                     setAvailableColors({
@@ -33,7 +47,12 @@ export default function RoomPage() {
                 }
             }).subscribe();
 
-        return () => { supabase.removeChannel(channel); };
+        channelRef.current = channel;
+
+        return () => {
+            supabase.removeChannel(channel);
+            channelRef.current = null;
+        };
     }, [roomCode]);
 
     const handleSelectColor = async (color: 'w' | 'b') => {
@@ -44,9 +63,24 @@ export default function RoomPage() {
             newState.players = newState.players || { w: false, b: false };
             newState.players[color] = true;
             await supabase.from('games').update({ state: newState }).eq('room_code', roomCode);
+
+            if (channelRef.current) {
+                channelRef.current.send({
+                    type: 'broadcast',
+                    event: 'presence_update',
+                    payload: { players: newState.players }
+                });
+            }
         } else {
             const initialState = { fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1', turn: 'w', upgrades: [], modifiers: {}, walls: {}, players: { w: color === 'w', b: color === 'b' } };
             await supabase.from('games').insert([{ room_code: roomCode, state: initialState }]);
+            if (channelRef.current) {
+                channelRef.current.send({
+                    type: 'broadcast',
+                    event: 'presence_update',
+                    payload: { players: initialState.players }
+                });
+            }
         }
     };
 
@@ -57,6 +91,14 @@ export default function RoomPage() {
                 const newState = { ...data.state };
                 newState.players[playerColor] = false;
                 await supabase.from('games').update({ state: newState }).eq('room_code', roomCode);
+
+                if (channelRef.current) {
+                    channelRef.current.send({
+                        type: 'broadcast',
+                        event: 'presence_update',
+                        payload: { players: newState.players }
+                    });
+                }
             }
         }
         setPlayerColor(null);
