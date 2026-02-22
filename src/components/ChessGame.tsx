@@ -28,7 +28,8 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
     const [walls, setWalls] = useState<Record<string, number>>({}); // square -> turns_left
     const [winner, setWinner] = useState<'w' | 'b' | null>(null);
     const [timeConfig, setTimeConfig] = useState({ base: 300, increment: 3 });
-    const [timeLeft, setTimeLeft] = useState({ w: 300, b: 300 });
+    const [timeLeft, setTimeLeft] = useState({ w: 300, b: 300 }); // strictly DB snapshot
+    const [displayTimeLeft, setDisplayTimeLeft] = useState({ w: 300, b: 300 }); // strictly for UI ticking
     const [lastMoveTime, setLastMoveTime] = useState<number | null>(null);
     const [history, setHistory] = useState<any[]>([]);
     const [viewingHistoryIndex, setViewingHistoryIndex] = useState<number | null>(null);
@@ -57,7 +58,10 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
                 setHistory(data.state.history || []);
                 setWinner(data.state.winner || null);
                 if (data.state.timeConfig) setTimeConfig(data.state.timeConfig);
-                if (data.state.timeLeft) setTimeLeft(data.state.timeLeft);
+                if (data.state.timeLeft) {
+                    setTimeLeft(data.state.timeLeft);
+                    setDisplayTimeLeft(data.state.timeLeft);
+                }
                 if (data.state.lastMoveTime) setLastMoveTime(data.state.lastMoveTime);
             } else if (error && error.code === 'PGRST116') {
                 // Should not happen now since RoomPage initializes, but fallback
@@ -118,21 +122,21 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
     }, [roomCode, chess]);
 
     useEffect(() => {
-        // Visual ticks
+        // Visual ticks: we only update `displayTimeLeft` based on the delta from `lastMoveTime`
         const interval = setInterval(() => {
-            if (lastMoveTime) {
-                // We tick locally, but we don't sync this DB directly.
-                // Re-calculate based on Date.now() - lastMoveTime
-                const elapsedSeconds = Math.floor((Date.now() - lastMoveTime) / 1000);
-                setTimeLeft(prev => ({
+            if (lastMoveTime && winner === null) {
+                const now = Date.now();
+                const elapsedSeconds = Math.floor((now - lastMoveTime) / 1000);
+
+                setDisplayTimeLeft(prev => ({
                     ...prev,
-                    [turn]: Math.max(0, prev[turn] - 1)
+                    [turn]: Math.max(0, timeLeft[turn] - elapsedSeconds)
                 }));
             }
-        }, 1000);
+        }, 200);
 
         return () => clearInterval(interval);
-    }, [lastMoveTime, turn]);
+    }, [lastMoveTime, turn, winner, timeLeft]);
 
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
@@ -668,6 +672,7 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
                 setModifiers(nextModifiers);
                 setWalls(nextWalls);
                 setTimeLeft(nextTimeLeft);
+                setDisplayTimeLeft(nextTimeLeft);
                 setLastMoveTime(Date.now());
                 if (nextWinner) setWinner(nextWinner);
 
@@ -894,53 +899,71 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
                     </div>
                 )}
 
-                {/* STATUS BANNER */}
-                {activeStatusBanner && (
-                    <div className="mt-4 w-full max-w-[600px] bg-green-900 text-black py-2 px-4 border border-green-400 font-bold text-center animate-[pulse_2s_infinite]">
-                        {activeStatusBanner}
-                    </div>
-                )}
-
-                <div className="mt-4 flex justify-between w-full max-w-[600px] text-green-700 font-mono text-sm uppercase tracking-widest bg-green-950/20 p-2 border border-green-900/50">
-                    <div className="flex gap-4">
-                        <span className={turn === 'w' ? 'text-green-400 font-bold' : ''}>W: {formatTime(timeLeft.w)}</span>
-                        <span className={turn === 'b' ? 'text-green-400 font-bold' : ''}>B: {formatTime(timeLeft.b)}</span>
-                    </div>
-                    <div>+ {timeConfig.increment}s</div>
-                </div>
                 <div className="mt-2 flex justify-between w-full max-w-[600px] text-green-700 font-mono text-sm uppercase tracking-widest">
                     <div>&gt; PLAYER: {playerColor === 'w' ? 'WHITE_SYS' : 'BLACK_SYS'}</div>
                     <div>&gt; STAT: {turn === playerColor ? <span className="text-green-400 animate-pulse">AWAITING_INPUT</span> : <span className="text-green-900">PROCESSING_OPPONENT...</span>}</div>
                 </div>
             </div>
 
-            {/* HISTORY PANEL */}
-            <div className="flex flex-col w-full xl:w-[320px] h-[600px] border border-green-500 bg-black shadow-[0_0_15px_rgba(74,222,128,0.1)]">
-                <div className="bg-green-900/40 border-b border-green-500 p-3 flex justify-between items-center">
-                    <span className="font-bold text-green-400">&gt; SYS_LOG [HISTORY]</span>
-                    <span className="text-xs text-green-700">&lt; / &gt; to scrub</span>
+            <div className="flex flex-col gap-6 w-full xl:w-[320px]">
+                {/* LARGE CLOCK PANEL */}
+                <div className="bg-black border-2 border-green-500 shadow-[0_0_15px_rgba(74,222,128,0.1)] p-4 flex flex-col items-center">
+                    <div className="text-green-600 text-xs tracking-widest uppercase mb-4 w-full border-b border-green-900 pb-2 flex justify-between">
+                        <span>SYS_TIME</span>
+                        <span>[+{timeConfig.increment}s/TURN]</span>
+                    </div>
+
+                    <div className="flex flex-col gap-4 w-full font-mono">
+                        {/* OPONNENT TIME (always top) */}
+                        <div className={`flex flex-col p-4 border ${turn !== playerColor ? 'border-green-400 bg-green-900/20 drop-shadow-[0_0_8px_rgba(74,222,128,0.3)] animate-pulse text-green-300' : 'border-green-900 text-green-700 bg-black'}`}>
+                            <span className="text-xs uppercase font-bold tracking-widest opacity-80 mb-1">
+                                {playerColor === 'w' ? 'BLACK (OPPONENT)' : 'WHITE (OPPONENT)'}
+                            </span>
+                            <span className="text-5xl font-black">
+                                {playerColor === 'w' ? formatTime(displayTimeLeft.b) : formatTime(displayTimeLeft.w)}
+                            </span>
+                        </div>
+
+                        {/* YOUR TIME (always bottom) */}
+                        <div className={`flex flex-col p-4 border ${turn === playerColor ? 'border-green-400 bg-green-900/20 drop-shadow-[0_0_8px_rgba(74,222,128,0.3)] animate-pulse text-green-300' : 'border-green-900 text-green-700 bg-black'}`}>
+                            <span className="text-xs uppercase font-bold tracking-widest opacity-80 mb-1">
+                                {playerColor === 'w' ? 'WHITE (YOU)' : 'BLACK (YOU)'}
+                            </span>
+                            <span className="text-5xl font-black">
+                                {playerColor === 'w' ? formatTime(displayTimeLeft.w) : formatTime(displayTimeLeft.b)}
+                            </span>
+                        </div>
+                    </div>
                 </div>
-                <div className="flex-1 overflow-y-auto p-4 space-y-1 font-mono text-sm text-green-600 flex flex-col scroll-smooth">
-                    {history.length === 0 ? (
-                        <div className="opacity-50 italic animate-[pulse_3s_infinite]">&gt; Awaiting moves...</div>
-                    ) : (
-                        history.map((h, i) => (
-                            <div
-                                key={i}
-                                className={`px-2 py-1.5 flex items-center gap-3 cursor-pointer hover:bg-green-900/30 transition-colors ${i === (viewingHistoryIndex ?? history.length - 1) ? 'bg-green-900/60 text-green-300 border-l-2 border-green-400' : 'border-l-2 border-transparent'}`}
-                                onClick={() => {
-                                    if (i === history.length - 1) {
-                                        setViewingHistoryIndex(null);
-                                    } else {
-                                        setViewingHistoryIndex(i);
-                                    }
-                                }}
-                            >
-                                <span className="opacity-40 text-[10px] w-6 text-right leading-none">{(i + 1).toString().padStart(2, '0')}</span>
-                                <span className={h.text.includes('[') ? 'text-green-400 font-bold' : ''}>{h.text}</span>
-                            </div>
-                        ))
-                    )}
+
+                {/* HISTORY PANEL */}
+                <div className="flex flex-col h-[400px] border-2 border-green-500 bg-black shadow-[0_0_15px_rgba(74,222,128,0.1)]">
+                    <div className="bg-green-900/40 border-b border-green-500 p-3 flex justify-between items-center">
+                        <span className="font-bold text-green-400">&gt; SYS_LOG [HISTORY]</span>
+                        <span className="text-xs text-green-700">&lt; / &gt; to scrub</span>
+                    </div>
+                    <div className="flex-1 overflow-y-auto p-4 space-y-1 font-mono text-sm text-green-600 flex flex-col scroll-smooth">
+                        {history.length === 0 ? (
+                            <div className="opacity-50 italic animate-[pulse_3s_infinite]">&gt; Awaiting moves...</div>
+                        ) : (
+                            history.map((h, i) => (
+                                <div
+                                    key={i}
+                                    className={`px-2 py-1.5 flex items-center gap-3 cursor-pointer hover:bg-green-900/30 transition-colors ${i === (viewingHistoryIndex ?? history.length - 1) ? 'bg-green-900/60 text-green-300 border-l-2 border-green-400' : 'border-l-2 border-transparent'}`}
+                                    onClick={() => {
+                                        if (i === history.length - 1) {
+                                            setViewingHistoryIndex(null);
+                                        } else {
+                                            setViewingHistoryIndex(i);
+                                        }
+                                    }}
+                                >
+                                    <span className="opacity-40 text-[10px] w-6 text-right leading-none">{(i + 1).toString().padStart(2, '0')}</span>
+                                    <span className={h.text.includes('[') ? 'text-green-400 font-bold' : ''}>{h.text}</span>
+                                </div>
+                            ))
+                        )}
+                    </div>
                 </div>
             </div>
         </div>
