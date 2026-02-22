@@ -24,6 +24,7 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
     // Special Modifier UI States
     const [awaitingSwapSource, setAwaitingSwapSource] = useState<string | null>(null);
     const [sniperAttacker, setSniperAttacker] = useState<string | null>(null);
+    const [ddosAttacker, setDdosAttacker] = useState<string | null>(null);
     const [builderActive, setBuilderActive] = useState<{ source: string, placed: string[] } | null>(null);
     const [walls, setWalls] = useState<Record<string, number>>({}); // square -> turns_left
     const [winner, setWinner] = useState<'w' | 'b' | null>(null);
@@ -182,6 +183,8 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
         'necromancer': 'NECRO: Spawns friendly pawn on capture',
         'sniper': 'SNIPER: Ranged kill without moving',
         'builder': 'BUILDER: Active - Place 3 walls anywhere (1 turn)',
+        'ddos': 'DDOS: Active - Freeze an enemy piece for 2 turns',
+        'frozen': 'FROZEN: Cannot move or use abilities',
         'time_add': '+30 SECONDS: Adds 30s to your clock',
         'time_sub': '-15 SECONDS: Removes 15s from opponent'
     };
@@ -509,6 +512,77 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
                     }
                 }
 
+                if (ddosAttacker) {
+                    const targetPiece = chess.get(square as any);
+                    if (targetPiece && targetPiece.color !== playerColor) {
+                        const nextWalls = decayWalls(walls);
+                        const nextModifiers = { ...modifiers };
+                        let nextWinner: 'w' | 'b' | null = winner;
+
+                        // Apply freeze mod
+                        nextModifiers[square] = { type: 'frozen', duration: 4 };
+
+                        // remove ddos modifier from attacker
+                        delete nextModifiers[ddosAttacker];
+
+                        setDdosAttacker(null);
+                        setSelectedSquare(null);
+
+                        let currentTurn = chess.turn();
+                        let fen = chess.fen();
+                        fen = fen.replace(` ${currentTurn} `, ` ${currentTurn === 'w' ? 'b' : 'w'} `);
+                        currentTurn = currentTurn === 'w' ? 'b' : 'w';
+                        chess.load(fen);
+
+                        // Process End-of-Turn spawns and movements for existing upgrades
+                        const nextUpgrades = processEndTurnSpawnsAndMoves(chess, upgrades);
+
+                        const moveText = `${playerColor === 'w' ? 'W' : 'B'}: [DDOS] 🧊 ${square}`;
+                        playSound('capture');
+                        const nextHistory = [...history, { fen: chess.fen(), upgrades: nextUpgrades, modifiers: nextModifiers, walls: nextWalls, text: moveText }];
+                        setHistory(nextHistory);
+
+                        if (nextWinner) setWinner(nextWinner);
+
+                        // Sync
+                        const newState = {
+                            fen: chess.fen(),
+                            turn: currentTurn,
+                            upgrades: nextUpgrades,
+                            modifiers: nextModifiers,
+                            walls: nextWalls,
+                            history: nextHistory,
+                            winner: nextWinner,
+                            timeConfig,
+                            timeLeft,
+                            lastMoveTime: Date.now()
+                        };
+
+                        setBoard(chess.board());
+                        setTurn(currentTurn as 'w' | 'b');
+                        setUpgrades(nextUpgrades);
+                        setModifiers(nextModifiers);
+                        setWalls(nextWalls);
+
+                        await supabase
+                            .from('games')
+                            .update({ state: newState })
+                            .eq('room_code', roomCode);
+
+                        if (channelRef.current) {
+                            channelRef.current.send({
+                                type: 'broadcast',
+                                event: 'game_update',
+                                payload: { state: newState }
+                            });
+                        }
+                        return;
+                    } else {
+                        playSound('error');
+                        return; // invalid target, ignore
+                    }
+                }
+
                 if (walls[square]) throw new Error("Blocked by Builder Wall");
 
                 const pieceAtSource = chess.get(selectedSquare as any);
@@ -739,6 +813,16 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
                 if (currentTurn !== turn) {
                     // Turn advanced! Add increment
                     nextTimeLeft[playerColor] += timeConfig.increment;
+
+                    // Tick frozen duration
+                    for (const key in nextModifiers) {
+                        if (nextModifiers[key].type === 'frozen') {
+                            nextModifiers[key].duration -= 1;
+                            if (nextModifiers[key].duration <= 0) {
+                                delete nextModifiers[key];
+                            }
+                        }
+                    }
                 }
 
                 // Process End-of-Turn spawns and movements for existing upgrades
@@ -801,15 +885,18 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
                 console.log("Invalid move to", square);
                 // Select new piece normally
                 const piece = chess.get(square as any);
-                if (piece && piece.color === playerColor) {
+                if (piece && piece.color === playerColor && modifiers[square]?.type !== 'frozen') {
                     setSelectedSquare(square);
                     setSniperAttacker(null);
+                    setDdosAttacker(null);
                     setBuilderActive(null);
                     setAwaitingSwapSource(null);
                     setArmedDoubleMove(null);
                 } else {
+                    if (modifiers[square]?.type === 'frozen') playSound('error');
                     setSelectedSquare(null);
                     setSniperAttacker(null);
+                    setDdosAttacker(null);
                     setBuilderActive(null);
                     setAwaitingSwapSource(null);
                     setArmedDoubleMove(null);
@@ -818,13 +905,16 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
         } else {
             // Trying to select a piece
             const piece = chess.get(square as any);
-            if (piece && piece.color === playerColor) {
+            if (piece && piece.color === playerColor && modifiers[square]?.type !== 'frozen') {
                 // Just select the piece! Do not auto-activate abilities anymore.
                 setSelectedSquare(square);
                 setSniperAttacker(null);
+                setDdosAttacker(null);
                 setBuilderActive(null);
                 setAwaitingSwapSource(null);
                 setArmedDoubleMove(null);
+            } else if (piece && piece.color === playerColor && modifiers[square]?.type === 'frozen') {
+                playSound('error');
             }
         }
     };
@@ -847,6 +937,13 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
             }
         }
 
+        if (ddosAttacker) {
+            const targetPiece = chess.get(sq as any);
+            if (targetPiece && targetPiece.color !== playerColor) {
+                return true;
+            }
+        }
+
         return false;
     };
 
@@ -864,6 +961,8 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
             activeStatusBanner = "[SWAP ABILITY] - CHOOSE FRIENDLY PIECE TO SWAP WITH";
         } else if (sniperAttacker) {
             activeStatusBanner = "[SNIPER ABILITY] - CHOOSE ENEMY IN RANGE TO DESTROY";
+        } else if (ddosAttacker) {
+            activeStatusBanner = "[DDOS ABILITY] - CHOOSE ENEMY TO FREEZE";
         } else if (builderActive) {
             activeStatusBanner = `[BUILDER ABILITY] - CLICK EMPTY SQUARES TO DROP WALLS (${builderActive.placed.length}/3)`;
         } else if (selectedSquare && modifiers[selectedSquare]) {
@@ -871,7 +970,7 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
             if (mod.type === 'double_move') activeStatusBanner = "[DOUBLE MOVE] - YOU GET TO MOVE THIS PIECE AGAIN";
             if (mod.type === 'ghost') activeStatusBanner = "[GHOST] - PASS THROUGH WALLS/PIECES THIS TURN";
             if (mod.type === 'martyrdom') activeStatusBanner = "[MARTYRDOM] - EXPLODES ON DEATH";
-            if (mod.type === 'hidden_move') activeStatusBanner = "[STEALTH] - NEXT MOVE INVISIBLE (WIP)";
+            if (mod.type === 'hidden_move') activeStatusBanner = "[STEALTH] - NEXT MOVE INVISIBLE";
             if (mod.type === 'necromancer') activeStatusBanner = "[NECROMANCER] - CAPTURES SPAWN A PAWN";
         }
     }
@@ -884,7 +983,7 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
     let displayStealthEntities = stealthEntities;
 
     let validDestinations: string[] = [];
-    if (selectedSquare && !sniperAttacker && !builderActive && !awaitingSwapSource && turn === playerColor && winner === null) {
+    if (selectedSquare && !sniperAttacker && !builderActive && !ddosAttacker && !awaitingSwapSource && turn === playerColor && winner === null) {
         try {
             validDestinations = chess.moves({ square: selectedSquare as any, verbose: true }).map(m => m.to);
         } catch (e) { }
@@ -993,6 +1092,14 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
                                                 <div className="w-4 h-4 rounded-full bg-green-400/60 shadow-[0_0_10px_rgba(74,222,128,0.8)] animate-pulse"></div>
                                             </div>
                                         )}
+                                        {sqMod?.type === 'frozen' && (
+                                            <div className="absolute inset-0 flex flex-col items-center justify-center z-20 pointer-events-none drop-shadow-[0_0_15px_rgba(56,189,248,0.9)] scale-150">
+                                                <span className="text-sky-400 font-extrabold text-[40px] opacity-80 animate-pulse">🧊</span>
+                                                <span className="text-sky-300 font-black text-[12px] bg-black/60 px-1 rounded absolute bottom-1">
+                                                    {Math.ceil(sqMod.duration / 2)} TURN{Math.ceil(sqMod.duration / 2) !== 1 ? 'S' : ''}
+                                                </span>
+                                            </div>
+                                        )}
                                         {sqMod && (
                                             <div
                                                 title={MODIFIER_DESCRIPTIONS[sqMod.type] || sqMod.type}
@@ -1019,13 +1126,14 @@ export default function ChessGame({ roomCode, playerColor }: { roomCode: string,
                 </div>
 
                 {/* MANUAL ABILITY ACTIVATION BUTTON */}
-                {selectedSquare && modifiers[selectedSquare] && ['sniper', 'builder', 'swap', 'double_move'].includes(modifiers[selectedSquare].type) && !sniperAttacker && !builderActive && !awaitingSwapSource && !isGameOver && (
+                {selectedSquare && modifiers[selectedSquare] && ['sniper', 'builder', 'swap', 'double_move', 'ddos'].includes(modifiers[selectedSquare].type) && !sniperAttacker && !ddosAttacker && !builderActive && !awaitingSwapSource && !isGameOver && (
                     <div className="mt-2 w-full max-w-[600px] flex justify-center">
                         <button
                             onClick={(e) => {
                                 e.stopPropagation();
                                 const type = modifiers[selectedSquare].type;
                                 if (type === 'sniper') setSniperAttacker(selectedSquare);
+                                if (type === 'ddos') setDdosAttacker(selectedSquare);
                                 if (type === 'builder') setBuilderActive({ source: selectedSquare, placed: [] });
                                 if (type === 'swap') setAwaitingSwapSource(selectedSquare);
                                 if (type === 'double_move') {

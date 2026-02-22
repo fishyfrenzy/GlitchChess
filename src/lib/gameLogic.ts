@@ -138,7 +138,7 @@ function spawnUpgrade(board: any[][], currentUpgrades: UpgradeEntity[], material
         chosenSquare = possibleSquares[idx];
     }
 
-    const upgradeTypes = ['double_move', 'martyrdom', 'hidden_move', 'swap', 'ghost', 'necromancer', 'sniper', 'builder', 'time_add', 'time_sub'];
+    const upgradeTypes = ['double_move', 'martyrdom', 'hidden_move', 'swap', 'ghost', 'necromancer', 'sniper', 'builder', 'ddos', 'time_add', 'time_sub'];
 
     return {
         id: Math.random().toString(36).substr(2, 9),
